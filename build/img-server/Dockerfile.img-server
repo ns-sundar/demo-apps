@@ -1,0 +1,18 @@
+FROM ubuntu:18.04
+
+RUN apt-get update && \
+  apt-get install -y net-tools iproute2 netcat dnsutils curl \
+      iputils-ping iptables nmap tcpdump
+
+WORKDIR /opt/demo
+USER root
+
+COPY ./img_server .
+
+RUN mkdir -p images
+COPY ./images ./images
+
+EXPOSE 3333
+
+
+CMD [ "./img_server" ]

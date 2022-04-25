@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: img-server
+  name: img-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: img-server
+  template:
+    metadata:
+      labels:
+        app: img-server
+    spec:
+      containers:
+      - image: img-server:latest
+        imagePullPolicy: IfNotPresent
+        name: img-server
+        ports:
+          - containerPort: 3333

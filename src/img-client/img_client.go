@@ -21,7 +21,6 @@ import (
     "image/color"
     "image/draw"
     "image/jpeg"
-    "time"
 )
 
 const (
@@ -35,12 +34,12 @@ func main() {
     client := getHttpClient(dnsServer)
 
     myApp := app.New()
-    fmt.Printf("B4 NewWindow: %s", 
     win := myApp.NewWindow("Demo")
     myCanvas := win.Canvas()
 
     go updateWin(myCanvas, client, serverURL)
 
+    // A dummy image to show initially
     m := image.NewRGBA(image.Rect(0, 0, 240, 240))
     blue := color.RGBA{0, 0, 255, 255}
     draw.Draw(m, m.Bounds(), &image.Uniform{blue}, image.ZP, draw.Src)
@@ -48,8 +47,6 @@ func main() {
 
     win.Resize(fyne2.NewSize(240, 240))
     myCanvas.SetContent(raster)
-
-    //go updateWin(myCanvas, client, serverURL)
 
     win.ShowAndRun() // blocking event loop, killed by CTRL-C
     myApp.Quit()
