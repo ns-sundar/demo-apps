@@ -25,81 +25,84 @@ import (
 
 const (
     initialWaitSec = 2
-    imageWaitSec = 2
-    dnsResolverTimeoutMs = 5000 // Timeout (ms) for the DNS resolver
+    imageWaitSec = 1
+    dnsServerTimeoutMs = 5000 // Name resolution timeout in millisec
+    winWidthPixels = 240
+    winHeightPixels = 240
 )
 
 func main() {
-    serverURL, dnsServer := getArgs()
+    serverName, serverPort, dnsServer := getArgs()
+
+    // Create a HTTP client with a custom DNS resolver
     client := getHttpClient(dnsServer)
 
+    // Init graphics window
     myApp := app.New()
     win := myApp.NewWindow("Demo")
     myCanvas := win.Canvas()
 
-    go updateWin(myCanvas, client, serverURL)
+    // Launch the app logic loop
+    go updateWin(myCanvas, client, serverName, serverPort, dnsServer)
 
     // A dummy image to show initially
-    m := image.NewRGBA(image.Rect(0, 0, 240, 240))
+    m := image.NewRGBA(image.Rect(0, 0, winWidthPixels, winHeightPixels))
     blue := color.RGBA{0, 0, 255, 255}
     draw.Draw(m, m.Bounds(), &image.Uniform{blue}, image.ZP, draw.Src)
     raster := canvas.NewRasterFromImage(m)
 
-    win.Resize(fyne2.NewSize(240, 240))
+    win.Resize(fyne2.NewSize(winWidthPixels, winHeightPixels))
     myCanvas.SetContent(raster)
 
     win.ShowAndRun() // blocking event loop, killed by CTRL-C
-    myApp.Quit()
 }
 
-//func updateWin(win fyne2.Window, client *http.Client, url string) {
-func updateWin(myCanvas fyne2.Canvas, client *http.Client, url string) {
+// updateWin fetches a new image from the specified server endpoint using the custom
+// HTTP client and displays it in the app window.
+func updateWin(myCanvas fyne2.Canvas, client *http.Client,
+               serverName, serverPort, dnsServer string) {
     time.Sleep(initialWaitSec * time.Second)
 
     counter := 0
 
     for {
+        counter++
         time.Sleep(imageWaitSec * time.Second)
-        name := fmt.Sprintf("image-%d", counter)
-        url_with_counter := fmt.Sprintf("%s?image=%d", url, counter)
-        fmt.Printf("Calling URL %s\n", url_with_counter)
-        image, err := httpGetImage(client, url_with_counter, name)
-        if err != nil {
-           fmt.Printf("Cannot get image %s. Error: %s\n", name, err.Error())
-           return
+
+        fmt.Printf("%d: %s ", counter, serverName)
+
+        // We resolve the server Name to an IP only for display purpose.
+        // The httpGet below also does a DNS lookup.
+        ip, lookupErr := lookupHost(serverName, dnsServer)
+        if lookupErr != nil {
+           fmt.Printf("Error in DNS resolution: %s\n", lookupErr.Error())
+           continue
         }
-        //fmt.Printf("Got image %s\n", name)
+        fmt.Printf("%s ", ip)
+
+        url := fmt.Sprintf("http://%s:%s?image=%d", serverName, serverPort, counter)
+        image, err := httpGetImage(client, url)
+        if err != nil {
+           fmt.Printf("Error: %s\n", err.Error())
+           continue
+        }
+
+        fmt.Printf("Got image\n")
         raster := canvas.NewRasterFromImage(image)
         myCanvas.SetContent(raster)
-        counter++
     }
 }
 
-func getArgs()  (string, string) {
-    var serverName, serverPort, dnsServer string
-
-    flag.StringVar(&serverName, "server", "webserver.demo.com", "HTTP server name")
-    flag.StringVar(&serverPort, "port", "32612", "HTTP server port")
-    flag.StringVar(&dnsServer, "dns", "192.168.0.199:53", "Custom DNS server with port")
-    flag.Parse()
-
-    serverURL := "http://" + serverName + ":" + serverPort
-    fmt.Printf("Will connect to %s using DNS %s\n", serverURL, dnsServer)
-
-    return serverURL, dnsServer
-}
-
-func getHttpClient(dnsResolverIP string) (*http.Client) {
-    //var dnsResolverTimeoutMs = 5000 // Timeout (ms) for the DNS resolver (optional)
-
+// getHttpClient returns a HTTP client configured with a custom DNS resolver
+func getHttpClient(dnsServer string) (*http.Client) {
     dialer := &net.Dialer{
         Resolver: &net.Resolver{
             PreferGo: true,
             Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
                 d := net.Dialer{
-                  Timeout: time.Duration(dnsResolverTimeoutMs) * time.Millisecond,
+                  Timeout: time.Duration(dnsServerTimeoutMs) * time.Millisecond,
                 }
-                return d.DialContext(ctx, network, dnsResolverIP)
+                return d.DialContext(ctx, network, dnsServer)
             },
         },
     }
@@ -113,11 +116,12 @@ func getHttpClient(dnsResolverIP string) (*http.Client) {
     return &http.Client{}
 }
 
+// httpGet returns the GET response from given URL using the given HTTP client
 func httpGet(client *http.Client, url string) ([]byte, error) {
     resp, err := client.Get(url)
     if err != nil {
-        fmt.Printf("unable to connect to http server - %s\n", err.Error())
-        return []byte{}, err
+        wrapErr := fmt.Errorf("unable to connect to http server: %w", err)
+        return []byte{}, wrapErr
     }
     if resp != nil && resp.Body != nil {
         defer resp.Body.Close()
@@ -125,65 +129,67 @@ func httpGet(client *http.Client, url string) ([]byte, error) {
 
     body, err := ioutil.ReadAll(resp.Body)
     if err != nil {
-        fmt.Printf("unable to read http server response - %s\n", err.Error())
-        return []byte{}, err
+        wrapErr := fmt.Errorf("unable to read http server response: %w", err)
+        return []byte{}, wrapErr
     }
 
-    //fmt.Println(string(body))
     return body, err
 }
 
-func httpGetImage(client *http.Client, url, name string) (image.Image, error) {
+// httpGetImage decodes the HTTP GET response as a JPEG image
+func httpGetImage(client *http.Client, url string) (image.Image, error) {
    getRespBody, err := httpGet(client, url)
    if err != nil {
-      fmt.Printf("HTTP GET failed. Error: (%s)\n", err.Error())
-      return nil, err
+      wrapErr := fmt.Errorf("HTTP GET failed: %w", err)
+      return nil, wrapErr
    }
 
    reader := bytes.NewReader(getRespBody)
-   // 2nd arg below is image type (e.g. jpeg)
-   // goImage, _, err := image.Decode(reader) // image of type image.Image
 
-   goImage, err := jpeg.Decode(reader)
+   img, err := jpeg.Decode(reader)
    if err != nil {
-      fmt.Printf("Image decode failed. Error: (%s)\n", err.Error())
-      return nil, err
+      wrapErr := fmt.Errorf("Image decode failed: %w", err)
+      return nil, wrapErr
    }
-   return goImage, nil
+
+   // Instead we can handle non-jpeg images too, as below.
+   // 2nd arg below is image type (e.g. jpeg)
+   // img, _, err := image.Decode(reader) // image of type image.Image
+
+   return img, nil
 }
 
-//func getImage() (image.Image) {
-func getImage() (*canvas.Image) {
-    m := image.NewRGBA(image.Rect(0, 0, 240, 240))
-    blue := color.RGBA{0, 0, 255, 255}
-    draw.Draw(m, m.Bounds(), &image.Uniform{blue}, image.ZP, draw.Src)
+// lookupHost does DNS resolution of given host using given DNS server
+func lookupHost(hostName, dnsServer string) (string, error) {
+    r := &net.Resolver{
+        PreferGo: true,
+        Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+            d := net.Dialer{
+                Timeout: time.Millisecond * time.Duration(dnsServerTimeoutMs),
+            }
+            return d.DialContext(ctx, network, dnsServer)
+        },
+    }
+    ip, err := r.LookupHost(context.Background(), hostName)
+    if err != nil {
+       return "", err
+    }
 
-    img := canvas.NewImageFromImage(m)
-    return img
+    //fmt.Printf("First IP address: %s\n", ip[0])
+    return ip[0], nil
 }
 
-func getNewImage() (*canvas.Image) {
-    m := image.NewRGBA(image.Rect(0, 0, 240, 240))
-    blue := color.RGBA{255, 0, 0, 255}
-    draw.Draw(m, m.Bounds(), &image.Uniform{blue}, image.ZP, draw.Src)
+func getArgs()  (string, string, string) {
+    var serverName, serverPort, dnsServer string
 
-    //var img image.Image = m
-    img := canvas.NewImageFromImage(m)
-    return img
+    flag.StringVar(&serverName, "server", "webserver.demo.com", "HTTP server name")
+    flag.StringVar(&serverPort, "port", "32612", "HTTP server port")
+    flag.StringVar(&dnsServer, "dns", "192.168.0.199:53", "Custom DNS server with port")
+    flag.Parse()
+
+    serverURL := "http://" + serverName + ":" + serverPort
+    fmt.Printf("Will connect to %s using DNS %s\n", serverURL, dnsServer)
+
+    return serverName, serverPort, dnsServer
 }
 
-//func showWindow(img image.Image) {
-func showWindow(image *canvas.Image) {
-    myApp := app.New()
-    win := myApp.NewWindow("Image")
-
-    // image := canvas.NewImageFromResource(theme.FyneLogo())
-    // image := canvas.NewImageFromURI(uri)
-    // image := canvas.NewImageFromImage(src)
-    // image := canvas.NewImageFromReader(reader, name)
-    // image := canvas.NewImageFromFile(fileName)
-    image.FillMode = canvas.ImageFillOriginal
-    win.SetContent(image)
-
-    win.ShowAndRun()
-}
